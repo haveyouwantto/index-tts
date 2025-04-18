@@ -22,87 +22,63 @@ i18n = I18nAuto(language="zh_CN")
 MODE = 'local'
 tts = IndexTTS(model_dir="checkpoints",cfg_path="checkpoints/config.yaml")
 
-# Ensure directories exist
 os.makedirs("outputs/tasks", exist_ok=True)
 os.makedirs("prompts", exist_ok=True)
 
-# Helper: list prompt audio files
+# 获取prompts中的音频文件
 def get_prompt_list():
-    files = os.listdir("prompts")
-    # filter common audio extensions
-    return [f for f in files if f.lower().endswith(('.wav', '.mp3', '.flac', '.ogg'))]
+    return [f for f in os.listdir("prompts") if f.endswith(('.wav', '.mp3', '.flac', '.ogg'))]
 
-# Generate speech function
-def gen_single(uploaded, choice, text, infer_mode, progress=gr.Progress()):
-    # decide which prompt to use
-    if uploaded:
-        prompt_path = uploaded
-    else:
-        prompt_path = os.path.join("prompts", choice) if choice else None
-    if not prompt_path or not os.path.isfile(prompt_path):
-        return gr.update(value=None, visible=False)
+# 生成音频
+def gen_single(prompt_audio, prompt_choice, text, infer_mode, progress=gr.Progress()):
+    output_path = None
+    if prompt_audio:
+        output_path = os.path.join("outputs", f"spk_{int(time.time())}.wav")
+        tts.gr_progress = progress
+        if infer_mode == "普通推理":
+            output = tts.infer(prompt_audio, text, output_path)  # 普通推理
+        else:
+            output = tts.infer_fast(prompt_audio, text, output_path)  # 批次推理
+    elif prompt_choice:
+        output_path = os.path.join("outputs", f"spk_{int(time.time())}.wav")
+        prompt_audio = os.path.join("prompts", prompt_choice)
+        tts.gr_progress = progress
+        if infer_mode == "普通推理":
+            output = tts.infer(prompt_audio, text, output_path)  # 普通推理
+        else:
+            output = tts.infer_fast(prompt_audio, text, output_path)  # 批次推理
+    return gr.update(value=output, visible=True)
 
-    # prepare output path
-    timestamp = int(time.time())
-    output_path = os.path.join("outputs", f"spk_{timestamp}.wav")
-
-    # set gradio progress
-    tts.gr_progress = progress
-    # inference
-    if infer_mode == "普通推理":
-        tts.infer(prompt_path, text, output_path)
-    else:
-        tts.infer_fast(prompt_path, text, output_path)
-    return gr.update(value=output_path, visible=True)
-
-# Update dropdown choices
-def refresh_prompts():
+# 更新音频文件列表
+def refresh_prompt_list():
     return gr.update(choices=get_prompt_list(), value=get_prompt_list()[0] if get_prompt_list() else None)
 
-# Build UI
-gr.Markdown('<h2 align="center">IndexTTS: 工业级可控高效零样本文本转语音系统</h2>')
+with gr.Blocks() as demo:
+    mutex = threading.Lock()
+    gr.HTML('''<h2><center>IndexTTS: An Industrial-Level Controllable and Efficient Zero-Shot Text-To-Speech System</h2>
+              <h2><center>(一款工业级可控且高效的零样本文本转语音系统)</h2>
+              <p align="center"><a href='https://arxiv.org/abs/2502.05512'><img src='https://img.shields.io/badge/ArXiv-2502.05512-red'></a>''')
 
-demo = gr.Blocks()
-with demo:
     with gr.Tab("音频生成"):
         with gr.Row():
-            prompt_audio = gr.Audio(
-                label="上传参考音频",
-                sources=["upload", "microphone"],
-                type="filepath",
-                interactive=True,
-            )
-
             with gr.Column():
-                prompt_choice = gr.Dropdown(
-                    choices=get_prompt_list(),
-                    value=get_prompt_list()[0] if get_prompt_list() else None,
-                    label="选择参考音频（若未上传则使用此项）",
-                    interactive=True,
-                )
+                prompt_audio = gr.Audio(label="请上传参考音频", key="prompt_audio",
+                                        sources=["upload", "microphone"], type="filepath")
+                prompt_choice = gr.Dropdown(choices=get_prompt_list(), value=None, label="选择音频文件（未上传则使用）", interactive=True)
                 refresh_button = gr.Button("刷新列表")
 
-        input_text_single = gr.TextArea(label="请输入目标文本", key="input_text_single")
-        infer_mode = gr.Radio(
-            choices=["普通推理", "批次推理"],
-            value="普通推理",
-            label="选择推理模式（批次推理：更适合长句，性能翻倍）",
-        )
-        gen_button = gr.Button("生成语音", key="gen_button", interactive=True)
-        output_audio = gr.Audio(label="生成结果", visible=False, key="output_audio")
+            with gr.Column():
+                input_text_single = gr.TextArea(label="请输入目标文本", key="input_text_single")
+                infer_mode = gr.Radio(choices=["普通推理", "批次推理"], label="选择推理模式（批次推理：更适合长句，性能翻倍）", value="普通推理")
+                gen_button = gr.Button("生成语音", key="gen_button", interactive=True)
+            output_audio = gr.Audio(label="生成结果", visible=True, key="output_audio")
 
-        # Callbacks
-        refresh_button.click(
-            fn=refresh_prompts,
-            inputs=None,
-            outputs=[prompt_choice]
-        )
+        # 刷新按钮功能
+        refresh_button.click(fn=refresh_prompt_list, inputs=[], outputs=[prompt_choice])
 
-        gen_button.click(
-            fn=gen_single,
-            inputs=[prompt_audio, prompt_choice, input_text_single, infer_mode],
-            outputs=[output_audio]
-        )
+        # 点击生成按钮
+        gen_button.click(fn=gen_single, inputs=[prompt_audio, prompt_choice, input_text_single, infer_mode],
+                         outputs=[output_audio])
 
 if __name__ == "__main__":
     demo.queue(20)
